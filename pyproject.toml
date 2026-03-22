@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "neuropool-context-engine"
+version = "0.1.0"
+description = "CLI agent for more effective token use"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+npe = "context_engine.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["context_engine*"]
