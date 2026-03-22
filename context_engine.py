@@ -160,15 +160,84 @@ def score_message_importance(
     )
 
 
-def prune_context(window: ContextWindow, target_tokens: int) -> ContextWindow:
+def _extractive_summary(messages: list[Message], max_summary_tokens: int) -> Optional[Message]:
     """
-    Prune the context window to fit within target_tokens by removing
-    low-importance messages first.
+    Build an extractive summary of *messages* that fits within max_summary_tokens.
+
+    Strategy: rank sentences across all messages by their TF-IDF score against
+    the joint corpus, then greedily add the top sentences until the budget is full.
+    The result is injected as a single synthetic 'system' message so the model
+    understands it represents compressed prior context.
+    """
+    if not messages:
+        return None
+
+    # Collect all sentences with their source role
+    sentences: list[tuple[str, str]] = []
+    for msg in messages:
+        for sent in re.split(r"(?<=[.!?])\s+", msg.content.strip()):
+            sent = sent.strip()
+            if sent:
+                sentences.append((sent, msg.role))
+
+    if not sentences:
+        return None
+
+    # Build IDF over sentence-level corpus
+    sent_tokens = [_tokenize(s) for s, _ in sentences]
+    idf = build_idf(sent_tokens)
+
+    # Score each sentence by its mean TF-IDF weight (higher = more informative)
+    scored_sents: list[tuple[float, str]] = []
+    for tokens, (sent, _) in zip(sent_tokens, sentences):
+        if not tokens:
+            scored_sents.append((0.0, sent))
+            continue
+        vec = _tfidf_vector(tokens, idf)
+        score = sum(vec.values()) / len(tokens)
+        scored_sents.append((score, sent))
+
+    scored_sents.sort(key=lambda x: x[0], reverse=True)
+
+    # Greedily fill the summary budget
+    chosen: list[str] = []
+    used = estimate_tokens("[Summary of earlier context] ")
+    for _, sent in scored_sents:
+        t = estimate_tokens(sent + " ")
+        if used + t <= max_summary_tokens:
+            chosen.append(sent)
+            used += t
+
+    if not chosen:
+        return None
+
+    summary_text = "[Prior context] " + " ".join(chosen)
+    return Message(
+        role="system",
+        content=summary_text,
+        token_count=estimate_tokens(summary_text),
+        importance_score=1.0,
+    )
+
+
+def prune_context(
+    window: ContextWindow,
+    target_tokens: int,
+    summarize: bool = False,
+    summary_ratio: float = 0.15,
+) -> ContextWindow:
+    """
+    Prune the context window to fit within target_tokens.
 
     Importance is scored using recency, role weight, and TF-IDF cosine
     similarity to the most recent user message as the relevance query.
 
-    Returns a new ContextWindow with pruned messages.
+    If summarize=True, dropped messages are extractively summarized and
+    injected as a synthetic system message instead of being discarded.
+    summary_ratio controls what fraction of the target budget the summary
+    may consume (default 15%).
+
+    Returns a new ContextWindow with pruned (and optionally summarized) messages.
     """
     if window.total_tokens <= target_tokens:
         return window
@@ -196,14 +265,39 @@ def prune_context(window: ContextWindow, target_tokens: int) -> ContextWindow:
         msg.importance_score = s
         scored.append((s, msg))
 
-    # Keep highest-importance messages that fit within the token budget
-    scored.sort(key=lambda x: x[0], reverse=True)
-    for score, msg in scored:
-        if pruned.total_tokens + msg.token_count <= target_tokens:
-            pruned.messages.append(msg)
+    # When summarizing, reserve a slice of the budget for the summary upfront
+    # so kept messages don't crowd it out.
+    summary_budget = max(25, int(target_tokens * summary_ratio)) if summarize else 0
+    msg_budget = target_tokens - summary_budget
 
-    # Restore original conversation order
-    pruned.messages.sort(key=lambda m: msgs.index(m))
+    # Keep highest-importance messages that fit within the (possibly reduced) budget
+    scored.sort(key=lambda x: x[0], reverse=True)
+    kept: set[int] = set()
+    for score, msg in scored:
+        if pruned.total_tokens + msg.token_count <= msg_budget:
+            pruned.messages.append(msg)
+            kept.add(id(msg))
+
+    # Build and inject summary of dropped messages
+    if summarize:
+        dropped = [m for m in msgs if id(m) not in kept and m.role != "system"]
+        if dropped:
+            summary_msg = _extractive_summary(dropped, summary_budget)
+            if summary_msg:
+                pruned.messages.append(summary_msg)
+
+    # Restore original conversation order (summary goes at position 1, after system)
+    system_msgs = [m for m in pruned.messages if m.role == "system" and m.content.startswith("[Prior context]")]
+    other_msgs = [m for m in pruned.messages if m not in system_msgs]
+    other_msgs.sort(key=lambda m: msgs.index(m) if m in msgs else -1)
+
+    first_system = next((m for m in other_msgs if m.role == "system"), None)
+    if system_msgs and first_system:
+        insert_at = other_msgs.index(first_system) + 1
+        other_msgs[insert_at:insert_at] = system_msgs
+        pruned.messages = other_msgs
+    else:
+        pruned.messages = system_msgs + other_msgs
 
     return pruned
 
@@ -212,6 +306,7 @@ def build_context(
     messages: list[dict],
     max_tokens: int,
     reserve_tokens: int = 500,
+    summarize: bool = False,
 ) -> ContextWindow:
     """
     Build a context window from a list of message dicts, respecting the token budget.
@@ -224,6 +319,7 @@ def build_context(
         messages: List of {"role": str, "content": str} dicts
         max_tokens: Maximum tokens for the context window
         reserve_tokens: Tokens to reserve for the model's response
+        summarize: If True, inject an extractive summary of dropped messages
     """
     usable_tokens = max_tokens - reserve_tokens
 
@@ -235,7 +331,7 @@ def build_context(
         token_count = estimate_tokens(content)
         full_window.messages.append(Message(role=role, content=content, token_count=token_count))
 
-    return prune_context(full_window, usable_tokens)
+    return prune_context(full_window, usable_tokens, summarize=summarize)
 
 
 def main():
@@ -264,6 +360,11 @@ def main():
         type=str,
         help="Path to write pruned context JSON (default: stdout)",
     )
+    parser.add_argument(
+        "--summarize",
+        action="store_true",
+        help="Inject an extractive summary of dropped messages instead of discarding them",
+    )
     args = parser.parse_args()
 
     if args.input:
@@ -280,7 +381,7 @@ def main():
             {"role": "assistant", "content": "You can read a file using open(): with open('file.txt') as f: content = f.read()"},
         ]
 
-    window = build_context(messages, args.max_tokens, args.reserve)
+    window = build_context(messages, args.max_tokens, args.reserve, summarize=args.summarize)
     result = window.to_dict()
 
     output_json = json.dumps(result, indent=2)
