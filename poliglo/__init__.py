@@ -25,10 +25,12 @@ Quick start:
 from .agent import ChatMessage, ChatReply, PoligloAgent
 from .alert_translator import AlertResult, AlertTranslator, Severity
 from .glossary import GLOSSARY
+from .glossary_extractor import GlossaryExtractor, GlossarySuggestion
 from .operator_bridge import OperatorBridge, OperatorSession
 
 __all__ = [
     "PoligloAgent", "ChatMessage", "ChatReply", "GLOSSARY",
     "OperatorBridge", "OperatorSession",
     "AlertTranslator", "AlertResult", "Severity",
+    "GlossaryExtractor", "GlossarySuggestion",
 ]
