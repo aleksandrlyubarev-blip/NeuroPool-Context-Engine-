@@ -187,7 +187,7 @@ class GlossaryExtractor:
             sender="glossary_extractor",
             text=prompt,
             target_lang="en",  # response in English JSON
-            source_lang="en",
+            source_lang="auto",
             context="glossary extraction task — respond in JSON only",
         )
         reply = self._agent.handle_message(msg)
