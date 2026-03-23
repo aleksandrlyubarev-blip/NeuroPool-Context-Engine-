@@ -14,9 +14,16 @@ Quick start:
     # Agent-to-agent chat
     reply = agent.handle_message(ChatMessage(sender="supervisor", text="...", target_lang="en"))
     print(reply.translated)
+
+    # Operator ↔ Nemotron bridge
+    from poliglo import OperatorBridge
+    bridge = OperatorBridge(agent)
+    session = bridge.create_session(operator_id="op-42", lang="ru")
+    en_text = bridge.operator_to_nemotron(session, "Линия 3 остановлена")
 """
 
 from .agent import ChatMessage, ChatReply, PoligloAgent
 from .glossary import GLOSSARY
+from .operator_bridge import OperatorBridge, OperatorSession
 
-__all__ = ["PoligloAgent", "ChatMessage", "ChatReply", "GLOSSARY"]
+__all__ = ["PoligloAgent", "ChatMessage", "ChatReply", "GLOSSARY", "OperatorBridge", "OperatorSession"]
