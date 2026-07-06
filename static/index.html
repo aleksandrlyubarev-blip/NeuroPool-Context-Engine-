@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PoLingvo — Что от меня хотят?</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #1c2733; --muted: #5b6b7b;
+    --accent: #0b57d0; --warn: #b3261e; --ok: #1e7e34; --border: #e0e4ea;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg); color: var(--ink); line-height: 1.5;
+    max-width: 640px; margin: 0 auto; padding: 16px;
+  }
+  header { text-align: center; padding: 24px 0 8px; }
+  header h1 { font-size: 1.6rem; }
+  header p.tagline { color: var(--muted); margin-top: 8px; }
+  .panel {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px; margin-top: 16px;
+  }
+  .btn {
+    display: block; width: 100%; padding: 14px; border: none; border-radius: 10px;
+    background: var(--accent); color: #fff; font-size: 1.05rem; cursor: pointer;
+    text-align: center; text-decoration: none;
+  }
+  .btn.secondary { background: #eef2f8; color: var(--accent); }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .hint { color: var(--muted); font-size: .85rem; text-align: center; margin-top: 10px; }
+  .credits { text-align: center; margin-top: 12px; font-size: .9rem; color: var(--muted); }
+  #spinner { display: none; text-align: center; padding: 24px 0; color: var(--muted); }
+  .dot { display:inline-block; width:8px; height:8px; margin:0 3px; border-radius:50%;
+         background: var(--accent); animation: b 1.2s infinite ease-in-out; }
+  .dot:nth-child(2){animation-delay:.15s}.dot:nth-child(3){animation-delay:.3s}
+  @keyframes b { 0%,80%,100%{transform:scale(.6);opacity:.4} 40%{transform:scale(1);opacity:1} }
+  .row { padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .row:last-child { border-bottom: none; }
+  .row .label { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em;
+                color: var(--muted); margin-bottom: 4px; }
+  .row .value { font-size: 1.02rem; }
+  .value.big { font-size: 1.35rem; font-weight: 600; }
+  .he { direction: rtl; text-align: right; unicode-bidi: isolate; font-size: .9rem;
+        color: var(--muted); background: #f2f4f7; border-radius: 8px; padding: 8px 10px;
+        margin-top: 6px; }
+  .actions li { margin: 8px 0 8px 20px; }
+  .refusal { border-color: var(--warn); }
+  .refusal h2 { color: var(--warn); font-size: 1.15rem; margin-bottom: 8px; }
+  .error { color: var(--warn); text-align: center; margin-top: 12px; }
+  .notfound { color: var(--muted); font-style: italic; }
+  footer { text-align: center; padding: 24px 0; font-size: .8rem; color: var(--muted); }
+  footer a { color: var(--muted); }
+  .disclaimer { font-size: .78rem; color: var(--muted); margin-top: 14px; text-align: center; }
+  input[type=file] { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="t-title"></h1>
+  <p class="tagline" id="t-tagline"></p>
+</header>
+
+<div class="panel" id="upload-panel">
+  <button class="btn" id="upload-btn"></button>
+  <input type="file" id="file-input" accept="image/jpeg,image/png,application/pdf">
+  <p class="hint" id="t-hint"></p>
+  <p class="credits" id="credits-line"></p>
+  <a class="btn secondary" id="pay-btn" style="display:none;margin-top:12px"></a>
+  <p class="error" id="error-line" style="display:none"></p>
+</div>
+
+<div id="spinner"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+  <p id="t-analyzing" style="margin-top:8px"></p></div>
+
+<div class="panel" id="card-panel" style="display:none"></div>
+<div class="panel refusal" id="refusal-panel" style="display:none"></div>
+<button class="btn secondary" id="again-btn" style="display:none;margin-top:16px"></button>
+
+<p class="disclaimer" id="t-disclaimer"></p>
+<footer><a href="/privacy" id="t-privacy"></a></footer>
+
+<script>
+(async function () {
+  const i18n = await (await fetch('/i18n/ru.json')).json();
+  const cfg = await (await fetch('/api/config')).json();
+  const $ = id => document.getElementById(id);
+
+  $('t-title').textContent = i18n.app.title.split('—')[0].trim();
+  document.title = i18n.app.title;
+  $('t-tagline').textContent = i18n.app.tagline;
+  $('upload-btn').textContent = i18n.app.upload_button;
+  $('t-hint').textContent = i18n.app.upload_hint;
+  $('t-analyzing').textContent = i18n.app.analyzing;
+  $('again-btn').textContent = i18n.app.try_again;
+  $('t-disclaimer').textContent = i18n.app.disclaimer;
+  $('t-privacy').textContent = i18n.app.privacy_link;
+
+  let token = localStorage.getItem('polingvo_token');
+  if (!token) {
+    token = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2) + Date.now());
+    localStorage.setItem('polingvo_token', token);
+  }
+
+  const payBtn = $('pay-btn');
+  payBtn.textContent = i18n.app.pay_button;
+  if (cfg.payment_link) {
+    const url = new URL(cfg.payment_link);
+    url.searchParams.set('client_reference_id', token);
+    payBtn.href = url.toString();
+  }
+
+  async function refreshCredits() {
+    try {
+      const r = await (await fetch('/api/credits?token=' + encodeURIComponent(token))).json();
+      $('credits-line').textContent = r.free_available
+        ? i18n.app.free_available
+        : i18n.app.credits_left + r.paid;
+      payBtn.style.display = (!r.free_available && r.paid === 0 && cfg.payment_link) ? 'block' : 'none';
+    } catch (e) { /* non-fatal */ }
+  }
+  refreshCredits();
+
+  $('upload-btn').addEventListener('click', () => $('file-input').click());
+  $('again-btn').addEventListener('click', () => {
+    $('card-panel').style.display = 'none';
+    $('refusal-panel').style.display = 'none';
+    $('again-btn').style.display = 'none';
+    $('upload-panel').style.display = 'block';
+    $('file-input').value = '';
+    refreshCredits();
+  });
+
+  function row(label, valueHtml, cls) {
+    return '<div class="row"><div class="label">' + label + '</div>' +
+           '<div class="value ' + (cls || '') + '">' + valueHtml + '</div></div>';
+  }
+  const esc = s => String(s).replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  function renderCard(card) {
+    const nf = '<span class="notfound">' + esc(i18n.card.not_found) + '</span>';
+    let html = '';
+    let sender = esc(card.sender_ru);
+    if (card.sender_he) sender += '<div class="he">' + esc(card.sender_he) + '</div>';
+    html += row(i18n.card.sender, sender);
+    html += row(i18n.card.doc_type, esc(card.doc_type_ru));
+    html += row(i18n.card.demand, esc(card.demand_summary_ru));
+    html += row(i18n.card.amount, card.amount_value !== null && card.amount_value !== undefined
+      ? '<span class="big">' + esc(card.amount_value) + ' ' +
+        (card.amount_currency === 'ILS' ? '₪' : esc(card.amount_currency || '')) + '</span>'
+      : nf);
+    html += row(i18n.card.deadline, card.deadline
+      ? '<span class="big">' + esc(card.deadline.split('-').reverse().join('.')) + '</span>' : nf);
+    if (card.consequences_ru) html += row(i18n.card.consequences, esc(card.consequences_ru));
+    if (card.recommended_actions_ru && card.recommended_actions_ru.length) {
+      html += row(i18n.card.actions, '<ul class="actions">' +
+        card.recommended_actions_ru.map(a => '<li>' + esc(a) + '</li>').join('') + '</ul>');
+    }
+    $('card-panel').innerHTML = html;
+    $('card-panel').style.display = 'block';
+  }
+
+  $('file-input').addEventListener('change', async (ev) => {
+    const file = ev.target.files[0];
+    if (!file) return;
+    $('error-line').style.display = 'none';
+    $('upload-panel').style.display = 'none';
+    $('spinner').style.display = 'block';
+
+    const form = new FormData();
+    form.append('file', file);
+    let resp, body;
+    try {
+      resp = await fetch('/api/analyze', {
+        method: 'POST', body: form, headers: { 'X-Client-Token': token }
+      });
+      body = await resp.json();
+    } catch (e) {
+      body = { status: 'error', error_ru: i18n.errors.internal };
+    }
+    $('spinner').style.display = 'none';
+
+    if (body.status === 'card') {
+      renderCard(body.card);
+      $('again-btn').style.display = 'block';
+    } else if (body.status === 'refusal') {
+      $('refusal-panel').innerHTML = '<h2>' + esc(i18n.refusal.title) + '</h2><p>' +
+        esc(body.refusal.reason_ru) + '</p>';
+      $('refusal-panel').style.display = 'block';
+      $('again-btn').style.display = 'block';
+    } else {
+      $('upload-panel').style.display = 'block';
+      $('error-line').textContent = body.error_ru || i18n.errors.internal;
+      $('error-line').style.display = 'block';
+      if (body.status === 'payment_required') payBtn.style.display = 'block';
+    }
+    refreshCredits();
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.pytest_cache/
+*.egg-info/
+# Real letters never live in git except the anonymized golden set,
+# which is added deliberately case by case.
+data/golden/**/letter.*
+!data/golden/README.md
